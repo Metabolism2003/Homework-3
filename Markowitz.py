@@ -60,7 +60,20 @@ class EqualWeightPortfolio:
 
         """
         TODO: Complete Task 1 Below
+
         """
+        # -----------------  Task 1 solution  -----------------
+        # number of investable assets (exclude = "SPY")
+        n_assets = len(assets)
+        # constant equal weight for every non-SPY asset
+        equal_w = 1.0 / n_assets
+
+        # assign the same weight to every date for those assets
+        self.portfolio_weights[assets] = equal_w
+        # make sure the excluded asset always has zero weight
+        self.portfolio_weights[self.exclude] = 0
+        # -----------------------------------------------------
+
 
         """
         TODO: Complete Task 1 Above
@@ -112,6 +125,21 @@ class RiskParityPortfolio:
         """
         TODO: Complete Task 2 Below
         """
+
+
+        # Calculate the portfolio weights
+        self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
+
+        # Compute rolling volatilities over the lookback window
+        volatility = df_returns[assets].rolling(window=self.lookback).std()
+        inv_vol     = 1.0 / volatility
+        # Normalize so that inverse-vol weights sum to 1 each period
+        weights     = inv_vol.div(inv_vol.sum(axis=1), axis=0)
+        # Assign to portfolio_weights (zero for excluded asset)
+        self.portfolio_weights[assets]      = weights
+        self.portfolio_weights[self.exclude] = 0
+
+
 
         """
         TODO: Complete Task 2 Above
@@ -184,12 +212,27 @@ class MeanVariancePortfolio:
                 """
                 TODO: Complete Task 3 Below
                 """
-
                 # Sample Code: Initialize Decision w and the Objective
                 # NOTE: You can modify the following code
-                w = model.addMVar(n, name="w", ub=1)
-                model.setObjective(w.sum(), gp.GRB.MAXIMIZE)
 
+
+                # --------------  Task 3 solution (FINAL) --------------
+                # decision variables: long-only, no explicit upper bound
+                w = model.addMVar(n, lb=0, name="w")
+
+                # budget ∑ wᵢ = 1
+                model.addConstr(w.sum() == 1, name="budget")
+
+                # linear part μᵀ w
+                lin = mu @ w
+
+                # quadratic risk term wᵀ Σ w
+                quad = gp.quicksum(Sigma[i, j] * w[i] * w[j]
+                                    for i in range(n) for j in range(n))
+
+                # objective max ( μᵀw − γ/2 · wᵀΣw )
+                model.setObjective(lin - (gamma / 2.0) * quad, gp.GRB.MAXIMIZE)
+                # ------------------------------------------------------
                 """
                 TODO: Complete Task 3 Above
                 """
