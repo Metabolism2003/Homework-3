@@ -57,140 +57,30 @@ class MyPortfolio:
         self.lookback = lookback
         self.gamma = gamma
 
+
+    def check_portfolio_position(self, weights: pd.DataFrame) -> bool:
+        # long‐only: no negative weights
+        if (weights < 0).any().any():
+            return False
+        # no leverage: sum of weights ≤ 1 each day
+        if (weights.sum(axis=1) > 1.0 + 1e-8).any():
+            return False
+        return True
+
     def calculate_weights(self):
-        # Get the assets by excluding the specified column
-        assets = self.price.columns[self.price.columns != self.exclude]
+        assets = [c for c in self.price.columns if c != self.exclude]
+        w = pd.DataFrame(0.0, index=self.price.index, columns=self.price.columns)
+        n_top = max(1, len(assets) // 2)
 
-        # Calculate the portfolio weights
-        self.portfolio_weights = pd.DataFrame(
-            index=self.price.index, columns=self.price.columns
-        )
+        for i in range(self.lookback, len(self.price)):
+            today = self.price.index[i]
+            past = self.price[assets].iloc[i - self.lookback : i + 1]
+            momentum = past.iloc[-1] / past.iloc[0] - 1.0
+            top_assets = momentum.nlargest(n_top).index.tolist()
+            w.loc[today, top_assets] = 1.0 / len(top_assets)
 
-        """
-        TODO: Complete Task 4 Below
-        """
-
-        # Implement a rolling Mean-Variance Optimization strategy
-        # Iterate through the index of the price DataFrame starting after the lookback period
-        # Use iloc for integer-based indexing for the loop to avoid issues with missing dates
-        for i in range(self.lookback, len(self.price.index)):
-            current_date = self.price.index[i]
-
-            # Define the lookback window using iloc and then get the dates
-            lookback_start_iloc = max(0, i - self.lookback)
-            lookback_end_iloc = i - 1 # Use data up to the day before the current date
-
-            # Ensure lookback window is valid
-            if lookback_end_iloc < lookback_start_iloc:
-                 continue # Skip if lookback window is empty or invalid
-
-            lookback_start_date = self.price.index[lookback_start_iloc]
-            lookback_end_date = self.price.index[lookback_end_iloc]
-
-            # Get prices for the lookback window using date slicing
-            # Ensure there are enough data points in the price series for the lookback window
-            # .loc handles potential missing dates in the index correctly
-            # Use the correctly scoped assets_for_optimization here
-            lookback_prices = self.price.loc[lookback_start_date:lookback_end_date, assets_for_optimization]
-
-            # Calculate daily returns within the lookback window
-            # Drop the first row of NaN from pct_change
-            lookback_returns = lookback_prices.pct_change().dropna()
-
-            # Need at least 2 data points (i.e., at least 3 price points) to calculate covariance
-            if len(lookback_returns) < 2:
-                # Not enough data in lookback window for covariance calculation
-                # Weights for current_date remain NaN initially
-                continue
-
-            # Estimate expected returns (annualized)
-            # Use mean of historical daily returns, then annualize
-            expected_returns = lookback_returns.mean() * 252
-
-            # Calculate covariance matrix (annualized assumes daily returns)
-            # Check if lookback_returns has only one row - cov() would be all zeros
-            if len(lookback_returns) > 1:
-                 cov_matrix = lookback_returns.cov() * 252 # Annualized covariance
-            else:
-                 # Handle case with only one data point in lookback_returns
-                 continue
-
-            # Handle potential NaNs or Infs in covariance matrix
-            if cov_matrix.isnull().values.any() or np.isinf(cov_matrix).values.any():
-                print(f"Warning: Covariance matrix contains NaN or Inf on {current_date}. Skipping optimization.")
-                continue
-
-            # Ensure covariance matrix is positive semi-definite (optional but robust)
-            # np.linalg.eigvalsh can check eigenvalues; all should be non-negative for PSD
-            try:
-                eigenvalues = np.linalg.eigvalsh(cov_matrix)
-                # Check if any eigenvalue is negative (allowing a small tolerance for numerical stability)
-                if np.any(eigenvalues < -1e-6):
-                     print(f"Warning: Covariance matrix is not positive semi-definite on {current_date}. Skipping optimization.")
-                     continue
-            except np.linalg.LinAlgError:
-                 # Handle cases where eigenvalue computation itself fails
-                 print(f"Warning: Could not compute eigenvalues for covariance matrix on {current_date}. Skipping optimization.")
-                 continue
-
-            try:
-                # Create a new Gurobi model for optimization
-                model = gp.Model()
-                model.setParam('OutputFlag', 0) # Suppress Gurobi output
-                model.setParam('TimeLimit', 60) # Add a time limit in seconds to prevent very long optimization runs
-
-                # Define weight variables for each asset in the optimization
-                # Use the correctly scoped assets_for_optimization here
-                weights = model.addVars(assets_for_optimization, name="w", lower=0.0) # Weights must be non-negative (long-only)
-
-                # Set objective: Mean-Variance Optimization
-                # Maximize Expected Return - 0.5 * gamma * Variance
-                # The objective function for Gurobi (which minimizes) is:
-                # minimize 0.5 * gamma * w' * Sigma * w - mu' * w
-
-                # Quadratic term: 0.5 * gamma * w' * Sigma * w (Variance component)
-                quadratic_term = gp.quicksum(cov_matrix.loc[a, b] * weights[a] * weights[b]
-                                            for a in assets_for_optimization for b in assets_for_optimization)
-
-                # Linear term: mu' * w (Expected Return component)
-                linear_term = gp.quicksum(expected_returns[asset] * weights[asset]
-                                          for asset in assets_for_optimization)
-
-                # The objective to minimize: 0.5 * gamma * Variance - Expected Return
-                objective = 0.5 * self.gamma * quadratic_term - linear_term
-
-                model.setObjective(objective, gp.GRB.MINIMIZE)
-
-                # Add constraint: The sum of portfolio weights must equal 1
-                model.addConstr(gp.quicksum(weights[a] for a in assets_for_optimization) == 1, "SumToOne")
-
-                # Optimize the model to find the optimal weights
-                model.optimize()
-
-                # Store the optimal weights if optimization was successful
-                if model.status == gp.GRB.OPTIMAL:
-                    for asset in assets_for_optimization:
-                        self.portfolio_weights.loc[current_date, asset] = weights[asset].X
-                    # SPY weight is already set to 0 for this date outside the loop
-                else:
-                    # If optimization fails for any reason, print a warning
-                    print(f"Warning: Gurobi did not find an optimal solution on {current_date}. Status: {model.status}")
-                    # The weights for this day will remain NaN, which will be handled by ffill later.
-
-            except gp.GurobiError as e:
-                # Catch and report Gurobi-specific errors
-                print(f"Gurobi error on {current_date}: {e}")
-            except Exception as e:
-                # Catch and report any other unexpected errors during optimization
-                print(f"An unexpected error occurred on {current_date}: {e}")
-
-
-        """
-        TODO: Complete Task 4 Above
-        """
-
-        self.portfolio_weights.ffill(inplace=True)
-        self.portfolio_weights.fillna(0, inplace=True)
+        self.portfolio_weights = w
+        return self.portfolio_weights
 
     def calculate_portfolio_returns(self):
         # Ensure weights are calculated

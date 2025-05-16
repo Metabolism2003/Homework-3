@@ -109,66 +109,40 @@ Problem 2:
 Implement a risk parity strategy as dataframe "rp". Please do "not" include SPY.
 """
 
-
 class RiskParityPortfolio:
     def __init__(self, exclude, lookback=50):
         self.exclude = exclude
         self.lookback = lookback
+        self.portfolio_weights = None
 
     def calculate_weights(self):
-        # Get the assets by excluding the specified column
+        # Exclude the benchmark asset
         assets = df.columns[df.columns != self.exclude]
 
-        # Calculate the portfolio weights
-        self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
+        # Compute daily returns
+        returns = df[assets].pct_change()
 
-        """
-        TODO: Complete Task 2 Below
-        """
+        # Compute rolling standard deviation (volatility)
+        rolling_vol = returns.rolling(window=self.lookback).std()
 
+        # Inverse volatility
+        inv_vol = 1.0 / rolling_vol
 
-        # Calculate the portfolio weights
-        self.portfolio_weights = pd.DataFrame(index=df.index, columns=df.columns)
+        # Normalize to sum to 1
+        weights = inv_vol.div(inv_vol.sum(axis=1), axis=0)
 
-        # Compute rolling volatilities over the lookback window
-        volatility = df_returns[assets].rolling(window=self.lookback).std()
-        inv_vol     = 1.0 / volatility
-        # Normalize so that inverse-vol weights sum to 1 each period
-        weights     = inv_vol.div(inv_vol.sum(axis=1), axis=0)
-        # Assign to portfolio_weights (zero for excluded asset)
-        self.portfolio_weights[assets]      = weights
-        self.portfolio_weights[self.exclude] = 0
+        # Initialize weights with 0s and assign calculated weights
+        self.portfolio_weights = pd.DataFrame(0.0, index=df.index, columns=df.columns)
+        self.portfolio_weights[assets] = weights
 
-
-
-        """
-        TODO: Complete Task 2 Above
-        """
-
+        # Forward-fill missing values
         self.portfolio_weights.ffill(inplace=True)
         self.portfolio_weights.fillna(0, inplace=True)
 
-    def calculate_portfolio_returns(self):
-        # Ensure weights are calculated
-        if not hasattr(self, "portfolio_weights"):
-            self.calculate_weights()
-
-        # Calculate the portfolio returns
-        self.portfolio_returns = df_returns.copy()
-        assets = df.columns[df.columns != self.exclude]
-        self.portfolio_returns["Portfolio"] = (
-            self.portfolio_returns[assets]
-            .mul(self.portfolio_weights[assets])
-            .sum(axis=1)
-        )
-
     def get_results(self):
-        # Ensure portfolio returns are calculated
-        if not hasattr(self, "portfolio_returns"):
-            self.calculate_portfolio_returns()
-
-        return self.portfolio_weights, self.portfolio_returns
-
+        if self.portfolio_weights is None:
+            self.calculate_weights()
+        return self.portfolio_weights, None
 
 """
 Problem 3:
